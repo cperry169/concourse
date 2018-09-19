@@ -12,7 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("ContainerRepository", func() {
+var _ = FDescribe("ContainerRepository", func() {
 	Describe("FindOrphanedContainers", func() {
 		Describe("check containers", func() {
 			var (
@@ -441,24 +441,10 @@ var _ = Describe("ContainerRepository", func() {
 			failedContainersLen, failedErr = containerRepository.DestroyFailedContainers()
 		})
 
-		ItClosesConnection := func() {
-			It("closes the connection", func() {
-				closed := make(chan bool)
-
-				go func() {
-					_, _ = containerRepository.DestroyFailedContainers()
-					closed <- true
-				}()
-
-				Eventually(closed).Should(Receive())
-			})
-		}
-
 		Context("when there are failed containers", func() {
 			BeforeEach(func() {
-
 				result, err := psql.Insert("containers").SetMap(map[string]interface{}{
-					"state":        "failed",
+					"state":        atc.ContainerStateFailed,
 					"handle":       "123-456-abc-def",
 					"worker_name":  defaultWorker.Name(),
 					"hijacked":     false,
@@ -472,10 +458,10 @@ var _ = Describe("ContainerRepository", func() {
 			It("returns all failed containers", func() {
 				Expect(failedContainersLen).To(Equal(1))
 			})
+
 			It("does not return an error", func() {
 				Expect(failedErr).ToNot(HaveOccurred())
 			})
-			ItClosesConnection()
 		})
 
 		Context("when there are no failed containers", func() {
@@ -485,7 +471,6 @@ var _ = Describe("ContainerRepository", func() {
 			It("does not return an error", func() {
 				Expect(failedErr).ToNot(HaveOccurred())
 			})
-			ItClosesConnection()
 		})
 
 		Describe("errors", func() {
@@ -500,7 +485,6 @@ var _ = Describe("ContainerRepository", func() {
 				It("returns an error", func() {
 					Expect(failedErr).To(HaveOccurred())
 				})
-				ItClosesConnection()
 			})
 
 			Context("when there is an invalid row", func() {
@@ -519,94 +503,192 @@ var _ = Describe("ContainerRepository", func() {
 					Expect(failedErr).ToNot(HaveOccurred())
 					Expect(failedContainersLen).To(Equal(1))
 				})
-
-				ItClosesConnection()
 			})
 		})
 	})
 
-	Describe("FindDestroyingContainers", func() {
-		var failedErr error
-		var destroyingContainers []string
+	Describe("Finding created/failed/destroying containers", func() {
+		BeforeEach(func() {
+			result, err := psql.Insert("containers").SetMap(map[string]interface{}{
+				"state":        atc.ContainerStateCreating,
+				"handle":       "creating-container",
+				"worker_name":  defaultWorker.Name(),
+				"hijacked":     true,
+				"discontinued": true,
+			}).RunWith(dbConn).Exec()
 
-		JustBeforeEach(func() {
-			destroyingContainers, failedErr = containerRepository.FindDestroyingContainers(defaultWorker.Name())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RowsAffected()).To(Equal(int64(1)))
+
+			result, err = psql.Insert("containers").SetMap(map[string]interface{}{
+				"state":        atc.ContainerStateCreated,
+				"handle":       "created-container",
+				"worker_name":  defaultWorker.Name(),
+				"hijacked":     false,
+				"discontinued": false,
+			}).RunWith(dbConn).Exec()
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RowsAffected()).To(Equal(int64(1)))
+
+			result, err = psql.Insert("containers").SetMap(map[string]interface{}{
+				"state":        atc.ContainerStateFailed,
+				"handle":       "failed-container",
+				"worker_name":  defaultWorker.Name(),
+				"hijacked":     false,
+				"discontinued": false,
+			}).RunWith(dbConn).Exec()
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RowsAffected()).To(Equal(int64(1)))
+
+			result, err = psql.Insert("containers").SetMap(map[string]interface{}{
+				"state":        atc.ContainerStateDestroying,
+				"handle":       "destroying-container-1",
+				"worker_name":  defaultWorker.Name(),
+				"hijacked":     true,
+				"discontinued": false,
+			}).RunWith(dbConn).Exec()
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RowsAffected()).To(Equal(int64(1)))
+
+			result, err = psql.Insert("containers").SetMap(map[string]interface{}{
+				"state":        atc.ContainerStateDestroying,
+				"handle":       "destroying-container-2",
+				"worker_name":  otherWorker.Name(),
+				"hijacked":     true,
+				"discontinued": true,
+			}).RunWith(dbConn).Exec()
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RowsAffected()).To(Equal(int64(1)))
+
+			result, err = psql.Insert("containers").SetMap(map[string]interface{}{
+				"state":  atc.ContainerStateFailed,
+				"handle": "container-without-worker",
+			}).RunWith(dbConn).Exec()
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RowsAffected()).To(Equal(int64(1)))
 		})
-		ItClosesConnection := func() {
-			It("closes the connection", func() {
-				closed := make(chan bool)
 
-				go func() {
-					_, _ = containerRepository.FindDestroyingContainers(defaultWorker.Name())
-					closed <- true
-				}()
+		Describe("FindFailedContainers", func() {
+			var failedErr error
+			var failedContainers []string
 
-				Eventually(closed).Should(Receive())
-			})
-		}
-
-		Context("when there are destroying containers", func() {
-			BeforeEach(func() {
-				result, err := psql.Insert("containers").SetMap(map[string]interface{}{
-					"state":        "destroying",
-					"handle":       "123-456-abc-def",
-					"worker_name":  defaultWorker.Name(),
-					"hijacked":     false,
-					"discontinued": false,
-				}).RunWith(dbConn).Exec()
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(result.RowsAffected()).To(Equal(int64(1)))
+			JustBeforeEach(func() {
+				failedContainers, failedErr = containerRepository.FindFailedContainers(defaultWorker.Name())
 			})
 
-			It("returns all destroying containers", func() {
-				Expect(destroyingContainers).To(HaveLen(1))
-				Expect(destroyingContainers[0]).To(Equal("123-456-abc-def"))
+			Context("when there are failed containers", func() {
+				It("returns all failed containers", func() {
+					Expect(failedContainers).To(HaveLen(1))
+					Expect(failedContainers[0]).To(Equal("failed-container"))
+				})
+
+				It("does not return an error", func() {
+					Expect(failedErr).ToNot(HaveOccurred())
+				})
 			})
 
-			It("does not return an error", func() {
-				Expect(failedErr).ToNot(HaveOccurred())
-			})
+			Describe("errors", func() {
+				Context("when the query cannot be executed", func() {
+					BeforeEach(func() {
+						err := dbConn.Close()
+						Expect(err).ToNot(HaveOccurred())
+					})
 
-			ItClosesConnection()
+					AfterEach(func() {
+						dbConn = postgresRunner.OpenConn()
+					})
+
+					It("returns an error", func() {
+						Expect(failedErr).To(HaveOccurred())
+					})
+				})
+			})
 		})
 
-		Describe("errors", func() {
-			Context("when the query cannot be executed", func() {
-				BeforeEach(func() {
-					err := dbConn.Close()
-					Expect(err).ToNot(HaveOccurred())
-				})
+		Describe("FindCreatedContainers", func() {
+			var failedErr error
+			var createdContainers []string
 
-				AfterEach(func() {
-					dbConn = postgresRunner.OpenConn()
-				})
-
-				It("returns an error", func() {
-					Expect(failedErr).To(HaveOccurred())
-				})
-
-				ItClosesConnection()
+			JustBeforeEach(func() {
+				createdContainers, failedErr = containerRepository.FindCreatedContainers(defaultWorker.Name())
 			})
 
-			Context("when there is an error iterating through the rows", func() {
-				BeforeEach(func() {
-					By("adding a row without expected values")
-					result, err := psql.Insert("containers").SetMap(map[string]interface{}{
-						"state":  "destroying",
-						"handle": "123-456-abc-def",
-					}).RunWith(dbConn).Exec()
-
-					Expect(err).ToNot(HaveOccurred())
-					Expect(result.RowsAffected()).To(Equal(int64(1)))
-
+			Context("when there are created containers", func() {
+				It("returns all created containers", func() {
+					Expect(createdContainers).To(HaveLen(1))
+					Expect(createdContainers[0]).To(Equal("created-container"))
 				})
 
-				It("returns empty list", func() {
-					Expect(destroyingContainers).To(HaveLen(0))
+				It("does not return an error", func() {
+					Expect(failedErr).ToNot(HaveOccurred())
+				})
+			})
+
+			Describe("errors", func() {
+				Context("when the query cannot be executed", func() {
+					BeforeEach(func() {
+						err := dbConn.Close()
+						Expect(err).ToNot(HaveOccurred())
+					})
+
+					AfterEach(func() {
+						dbConn = postgresRunner.OpenConn()
+					})
+
+					It("returns an error", func() {
+						Expect(failedErr).To(HaveOccurred())
+					})
+				})
+			})
+		})
+
+		Describe("FindDestroyingContainers", func() {
+			var failedErr error
+			var destroyingContainers []string
+
+			JustBeforeEach(func() {
+				destroyingContainers, failedErr = containerRepository.FindDestroyingContainers(defaultWorker.Name())
+			})
+
+			Context("when there are destroying containers", func() {
+				It("returns all destroying containers", func() {
+					Expect(destroyingContainers).To(HaveLen(1))
+					Expect(destroyingContainers[0]).To(Equal("destroying-container-1"))
 				})
 
-				ItClosesConnection()
+				It("does not return an error", func() {
+					Expect(failedErr).ToNot(HaveOccurred())
+				})
+			})
+
+			Describe("errors", func() {
+				Context("when the query cannot be executed", func() {
+					BeforeEach(func() {
+						err := dbConn.Close()
+						Expect(err).ToNot(HaveOccurred())
+					})
+
+					AfterEach(func() {
+						dbConn = postgresRunner.OpenConn()
+					})
+
+					It("returns an error", func() {
+						Expect(failedErr).To(HaveOccurred())
+					})
+				})
+			})
+		})
+	})
+
+	Describe("RemoveContainers", func() {
+
+		Context("list of handles is empty", func() {
+			It("fails", func() {
 			})
 		})
 	})
@@ -619,18 +701,6 @@ var _ = Describe("ContainerRepository", func() {
 		JustBeforeEach(func() {
 			numDeleted, failedErr = containerRepository.RemoveDestroyingContainers(defaultWorker.Name(), handles)
 		})
-		ItClosesConnection := func() {
-			It("closes the connection", func() {
-				closed := make(chan bool)
-
-				go func() {
-					_, _ = containerRepository.RemoveDestroyingContainers(defaultWorker.Name(), handles)
-					closed <- true
-				}()
-
-				Eventually(closed).Should(Receive())
-			})
-		}
 
 		Context("when there are containers to destroy", func() {
 
@@ -638,7 +708,7 @@ var _ = Describe("ContainerRepository", func() {
 				BeforeEach(func() {
 					handles = []string{"some-handle1", "some-handle2"}
 					result, err := psql.Insert("containers").SetMap(map[string]interface{}{
-						"state":        "destroying",
+						"state":        atc.ContainerStateDestroying,
 						"handle":       "123-456-abc-def",
 						"worker_name":  defaultWorker.Name(),
 						"hijacked":     false,
@@ -667,7 +737,7 @@ var _ = Describe("ContainerRepository", func() {
 				BeforeEach(func() {
 					handles = []string{}
 					result, err := psql.Insert("containers").SetMap(map[string]interface{}{
-						"state":        "destroying",
+						"state":        atc.ContainerStateDestroying,
 						"handle":       "123-456-abc-def",
 						"worker_name":  defaultWorker.Name(),
 						"hijacked":     false,
@@ -677,6 +747,7 @@ var _ = Describe("ContainerRepository", func() {
 					Expect(err).ToNot(HaveOccurred())
 					Expect(result.RowsAffected()).To(Equal(int64(1)))
 				})
+
 				It("should destroy", func() {
 					result, err := psql.Select("*").From("containers").
 						Where(sq.Eq{"handle": "123-456-abc-def"}).RunWith(dbConn).Exec()
@@ -684,9 +755,11 @@ var _ = Describe("ContainerRepository", func() {
 					Expect(err).ToNot(HaveOccurred())
 					Expect(result.RowsAffected()).To(Equal(int64(0)))
 				})
+
 				It("returns the correct number of rows removed", func() {
 					Expect(numDeleted).To(Equal(1))
 				})
+
 				It("does not return an error", func() {
 					Expect(failedErr).ToNot(HaveOccurred())
 				})
@@ -720,8 +793,6 @@ var _ = Describe("ContainerRepository", func() {
 					Expect(failedErr).ToNot(HaveOccurred())
 				})
 			})
-
-			ItClosesConnection()
 		})
 
 		Context("when there are no containers to destroy", func() {
@@ -767,8 +838,6 @@ var _ = Describe("ContainerRepository", func() {
 			It("returns the correct number of rows removed", func() {
 				Expect(numDeleted).To(Equal(0))
 			})
-
-			ItClosesConnection()
 		})
 
 		Describe("errors", func() {
@@ -785,8 +854,6 @@ var _ = Describe("ContainerRepository", func() {
 				It("returns an error", func() {
 					Expect(failedErr).To(HaveOccurred())
 				})
-
-				ItClosesConnection()
 			})
 		})
 	})

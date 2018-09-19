@@ -37,24 +37,30 @@ func NewDestroyer(
 }
 
 func (d *destroyer) DestroyContainers(workerName string, currentHandles []string) error {
+	if workerName == "" {
+		err := errors.New("worker-name-must-be-provided")
+		d.logger.Error("failed-to-destroy-containers", err)
 
-	if workerName != "" {
-		if currentHandles != nil {
-			deleted, err := d.containerRepository.RemoveDestroyingContainers(workerName, currentHandles)
-			if err != nil {
-				d.logger.Error("failed-to-destroy-containers", err)
-				return err
-			}
+		return err
+	}
 
-			metric.ContainersDeleted.IncDelta(deleted)
-		}
+	if currentHandles == nil {
 		return nil
 	}
 
-	err := errors.New("worker-name-must-be-provided")
-	d.logger.Error("failed-to-destroy-containers", err)
+	// CC: 1. query worker containers db
+	//     2. compute diff
+	//		    for removal := range removals { mark_as_destroying(removal) }
 
-	return err
+	deleted, err := d.containerRepository.RemoveDestroyingContainers(workerName, currentHandles)
+	if err != nil {
+		d.logger.Error("failed-to-destroy-containers", err)
+		return err
+	}
+
+	// CC: should we also increment? **probably not**
+	metric.ContainersDeleted.IncDelta(deleted)
+	return nil
 }
 
 func (d *destroyer) DestroyVolumes(workerName string, currentHandles []string) error {

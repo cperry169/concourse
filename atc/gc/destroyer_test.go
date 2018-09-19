@@ -42,7 +42,6 @@ var _ = Describe("Destroyer", func() {
 			BeforeEach(func() {
 				handles = []string{"some-handle1", "some-handle2"}
 				workerName = "some-worker"
-
 			})
 
 			It("succeed", func() {
@@ -80,6 +79,36 @@ var _ = Describe("Destroyer", func() {
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(fakeContainerRepository.RemoveDestroyingContainersCallCount()).To(Equal(1))
+			})
+		})
+
+		Context("worker view of containers does not match db view of containers", func() {
+			var (
+				createdContainerHandles []string
+				failedContainerHandles  []string
+			)
+
+			JustBeforeEach(func() {
+				fakeContainerRepository.FindCreatedContainersReturns(createdContainerHandles, nil)
+				fakeContainerRepository.FindFailedContainersReturns(failedContainerHandles, nil)
+				err = destroyer.DestroyContainers(workerName, handles)
+			})
+
+			//			worker: a,b,c      db: a,b
+			Context("there are more containers in the worker than in the db", func() {
+			})
+
+			//			worker: a,b        db: a,b,c
+			Context("there are fewer containers in the worker than in the db", func() {
+				BeforeEach(func() {
+					createdContainerHandles = []string{"a"}
+					failedContainerHandles = []string{"b"}
+					handles = []string{"a", "b", "c"}
+				})
+
+				It("removes the extra containers from the db", func() {
+					// CC: TODO
+				})
 			})
 		})
 
